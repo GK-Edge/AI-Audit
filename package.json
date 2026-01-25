@@ -1,0 +1,17 @@
+{
+  "name": "ai-auditor-monorepo",
+  "version": "1.0.0",
+  "description": "AI Security Auditor Agent - Monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "npm test --workspaces",
+    "onboard": "npm run wizard --workspace=@ai-auditor/agent-core"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.0"
+  }
+}

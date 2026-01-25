@@ -1,0 +1,11 @@
+{
+    "name": "@ai-auditor/shared-types",
+    "version": "1.0.0",
+    "type": "module",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "watch": "tsc -w"
+    }
+}

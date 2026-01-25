@@ -1,0 +1,56 @@
+rules:
+  - id: detect-plaintext-token-storage
+    message: >-
+      Detected improper storage of potential OAuth/Auth tokens without encryption.
+      Storing tokens in plaintext files or databases allows attackers to steal user sessions.
+      Ensure tokens are encrypted before storage (e.g., using `crypto.createCipheriv`).
+    severity: CRITICAL
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources:
+      - pattern: $RES.data.access_token
+      - pattern: $RES.data.refresh_token
+      - pattern: $RE.body.access_token
+      - pattern: $RE.body.refresh_token
+      - patterns:
+          - pattern: $VAR
+          - pattern-regex: (access|refresh)Token
+    pattern-sinks:
+      - pattern: fs.writeFileSync(...)
+      - pattern: fs.promises.writeFile(...)
+      - pattern: fs.appendFileSync(...)
+      - pattern: $DB.collection(...).insertOne(...)
+      - pattern: $DB.collection(...).updateOne(...)
+      - pattern: $MODEL.create(...)
+      - pattern: $MODEL.update(...)
+      - pattern: $MODEL.save(...)
+    pattern-sanitizers:
+      - pattern: $CIPHER.update(...)
+      - pattern: $CIPHER.final(...)
+      - pattern: bcrypt.hash(...)
+      - pattern: jwt.sign(...)
+
+  - id: detect-token-leak-to-external-api
+    message: >-
+      Detected potential leakage of authentication tokens to an external Third-Party API.
+      Sending OAuth tokens to non-Google/non-internal endpoints breaks CASA/ASVS requirements.
+      Verify the destination URL is trusted.
+    severity: CRITICAL
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources:
+      - pattern: $RES.data.access_token
+      - pattern: $RES.data.refresh_token
+      - patterns:
+          - pattern: $VAR
+          - pattern-regex: (access|refresh|auth)Token
+    pattern-sinks:
+      - pattern: axios.post(...)
+      - pattern: axios.get(...)
+      - pattern: fetch(...)
+      - pattern: request.post(...)
+    pattern-sanitizers:
+      - pattern: $URL
+        metavariable-regex:
+          metavariable: $URL
+          regex: ^["'](https?:\/\/)?((www\.)?googleapis\.com|accounts\.google\.com|localhost|127\.0\.0\.1).*["']$
