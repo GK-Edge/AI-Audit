@@ -14,15 +14,13 @@
 
 **AI Auditor Agent** is an AI-native security auditing CLI that helps startups achieve compliance with standards like **CASA Tier 2**. It orchestrates industry-standard scanners, maps findings to compliance requirements, and produces compliance-ready reports.
 
-Website: https://gkedgemedia.com/
 
-Leave us a star 🌟 if you like our project. Thank you!
-
-Authored by [Manos Koulouris](https://github.com/ManosKoulouris).
 
 ## Why it exists
 
 Compliance is VERY expensive, slow, manual, and usually starts too late. This project turns security evidence collection into a repeatable, developer-friendly workflow so teams can ship faster without losing audit readiness.
+
+![AI Auditor CLI demo](media/202601260022.gif)
 
 ## How it works
 
@@ -131,3 +129,9 @@ node packages/agent-core/dist/index.js scan /path/to/your/repo --output ./report
 ## License
 
 MIT License. Copyright (c) 2026 [GK Edge](https://gkedgemedia.com/).
+
+Website: https://gkedgemedia.com/
+
+Leave us a star 🌟 if you like our project. Thank you!
+
+Authored by Manos Koulouris.
