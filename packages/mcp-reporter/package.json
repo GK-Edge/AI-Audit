@@ -9,7 +9,7 @@
     },
     "dependencies": {
         "@ai-auditor/shared-types": "*",
-        "@modelcontextprotocol/sdk": "^0.6.0",
+        "@modelcontextprotocol/sdk": "^1.25.3",
         "zod": "^3.22.4"
     }
 }
