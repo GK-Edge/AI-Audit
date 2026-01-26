@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.npm/
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+build/
+
+# Caches and Logs
+tmp_cache/
+*.log
+.eslintcache
+
+# Tool-specific artifacts
+debug_semgrep.json
+tmp-report.sarif
+audit_report_*.md
+packages/agent-core/audit_report_*.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test artifacts (created by verify-secrets.sh)
+test-secrets-repo/
+test-scan/report.md
+test-scan/deep-report.md
+test-scan/cissp-report.md
+test-scan/soc2-report.md
