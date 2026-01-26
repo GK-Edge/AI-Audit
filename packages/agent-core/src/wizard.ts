@@ -1,4 +1,5 @@
 
+
 import inquirer from 'inquirer';
 import ora from 'ora';
 import chalk from 'chalk';
@@ -135,11 +136,14 @@ async function main() {
         }
     });
 
+    let errorLog = '';
+
     child.stderr.on('data', (data) => {
-        // Only log actual errors, ignore innocent warnings if possible, or just log to debug file?
-        // For UI cleanliness we might ignore stderr unless it crashes, 
-        // but often tools log progress to stderr.
-        // Let's just keep spinner spinning.
+        const line = data.toString().trim();
+        if (!line) return;
+        errorLog += line + '\n';
+        // Optional: Uncomment to see live errors in verbose mode
+        // console.error(chalk.red(line)); 
     });
 
     child.on('close', (code) => {
@@ -151,7 +155,11 @@ async function main() {
         } else {
             spinner.fail(chalk.red('Audit Failed'));
             console.error(chalk.red(`Process exited with code ${code}`));
-            console.error('Last log:', lastLog);
+            console.error(chalk.yellow('Last stdout log:'), lastLog);
+            if (errorLog) {
+                console.error(chalk.red('\nError Details (stderr):'));
+                console.error(errorLog);
+            }
         }
     });
 }
