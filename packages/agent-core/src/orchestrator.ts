@@ -46,7 +46,7 @@ export async function runAudit(
     profileId: string = "CASA-Tier-2",
     targetUrl?: string,
     authToken?: string,
-    reportFormat?: "markdown" | "sarif",
+    reportFormat?: "markdown" | "sarif" | "both",
     failOn?: Severity
 ) {
     // Resolve paths to the MCP server scripts (dist/index.js)
@@ -80,7 +80,8 @@ export async function runAudit(
                         arguments: { targetPath }
                     }
                 },
-                CallToolResultSchema
+                CallToolResultSchema,
+                { timeout: 600000 } // Increase timeout to 10 minutes for large repos
             );
 
             if (sastResult.content[0].type === "text") {
@@ -118,7 +119,8 @@ export async function runAudit(
                         arguments: { targetPath }
                     }
                 },
-                CallToolResultSchema
+                CallToolResultSchema,
+                { timeout: 600000 }
             );
 
             if (depResult.content[0].type === "text") {
@@ -203,7 +205,8 @@ export async function runAudit(
                         arguments: { targetPath }
                     }
                 },
-                CallToolResultSchema
+                CallToolResultSchema,
+                { timeout: 600000 }
             );
 
             if (infraResult.content[0].type === "text") {
@@ -267,27 +270,51 @@ export async function runAudit(
 
 
         // 6. Generate Report
-        console.log(`Generating Report at ${outputPath} using profile ${profileId}...`);
-        try {
-            const reportResult = await reporterClient.request(
-                {
-                    method: "tools/call",
-                    params: {
-                        name: "generate_report",
-                        arguments: {
-                            findings: finalGroups, // Passing Groups now!
-                            outputPath,
-                            profileId,
-                            format: reportFormat
+        // 6. Generate Report
+        console.log(`Generating Report(s) using profile ${profileId}...`);
+
+        const formatsToGenerate: ("markdown" | "sarif")[] = [];
+        if (reportFormat === "both") {
+            formatsToGenerate.push("markdown", "sarif");
+        } else if (reportFormat) {
+            formatsToGenerate.push(reportFormat);
+        } else {
+            formatsToGenerate.push("markdown"); // Default
+        }
+
+        for (const fmt of formatsToGenerate) {
+            // Determine output path with correct extension
+            const ext = path.extname(outputPath);
+            const base = outputPath.slice(0, outputPath.length - ext.length);
+            const targetExt = fmt === "markdown" ? ".md" : ".sarif";
+            // If the original output path already had the correct extension, use it (mostly for single file case), 
+            // but for 'both' or mismatch, force the extension.
+            // actually, always forcing it based on base name is safer to avoid "report.md.sarif" unless intended, 
+            // but relying on 'base' handles "report.md" -> "report" -> "report.sarif".
+            const currentOutputPath = `${base}${targetExt}`;
+
+            console.log(`Generating ${fmt} report at ${currentOutputPath}...`);
+            try {
+                const reportResult = await reporterClient.request(
+                    {
+                        method: "tools/call",
+                        params: {
+                            name: "generate_report",
+                            arguments: {
+                                findings: finalGroups,
+                                outputPath: currentOutputPath,
+                                profileId,
+                                format: fmt
+                            }
                         }
-                    }
-                },
-                CallToolResultSchema
-            );
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            console.log((reportResult.content[0] as any).text); // "Report generated successfully..."
-        } catch (err) {
-            console.error("Failed to generate report:", err);
+                    },
+                    CallToolResultSchema
+                );
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                console.log((reportResult.content[0] as any).text);
+            } catch (err) {
+                console.error(`Failed to generate ${fmt} report:`, err);
+            }
         }
 
         if (failOn) {

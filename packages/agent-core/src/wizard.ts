@@ -60,21 +60,37 @@ async function main() {
         {
             type: 'checkbox',
             name: 'reportFormats',
-            message: 'Report output options (select any):',
+            message: 'Report output options (select using Space bar):',
             choices: [
+                {
+                    name: 'Generate .md document (Easy to read)',
+                    value: 'markdown',
+                    checked: true
+                },
                 {
                     name: 'Generate SARIF (helps LLMs triage faster, CI tools like GitHub/AWS/Azure ingest results)',
                     value: 'sarif'
                 }
             ],
-            default: []
+            default: ['markdown']
         }
     ]);
 
-    const auditProfile = "CASA-Tier-2"; // Currently the only fully supported profile
-    const wantsSarif = Array.isArray(answers.reportFormats) && answers.reportFormats.includes('sarif');
-    const reportExtension = wantsSarif ? 'sarif' : 'md';
-    const reportName = `audit_report_${Date.now()}.${reportExtension}`;
+    const auditProfile = "CASA-Tier-2";
+    const selectedFormats = answers.reportFormats || [];
+    const wantsSarif = selectedFormats.includes('sarif');
+    const wantsMd = selectedFormats.includes('markdown'); // or length 0 default? assuming md default if nothing selected isn't handled by checkbox default
+
+    let formatArg = 'markdown';
+    if (wantsSarif && wantsMd) {
+        formatArg = 'both';
+    } else if (wantsSarif) {
+        formatArg = 'sarif';
+    } else {
+        formatArg = 'markdown';
+    }
+
+    const reportName = `audit_report_${Date.now()}.md`; // Base name, orchestrator handles extensions
     const outputPath = path.join(process.cwd(), reportName);
 
     console.log(`\n${chalk.blue('ℹ')} Selected Audit: ${chalk.bold(answers.auditType)}`);
@@ -92,9 +108,7 @@ async function main() {
     const cliPath = path.resolve(__dirname, 'index.js'); // Assuming wizard.js and index.js are in same dir (dist)
 
     const args = [cliPath, 'scan', answers.targetPath, '--output', outputPath, '--standard', auditProfile];
-    if (wantsSarif) {
-        args.push('--format', 'sarif');
-    }
+    args.push('--format', formatArg);
     if (answers.targetUrl) {
         args.push('--url', answers.targetUrl);
     }
@@ -149,9 +163,17 @@ async function main() {
     child.on('close', (code) => {
         if (code === 0) {
             spinner.succeed(chalk.green('Audit Complete!'));
-            console.log('\n' + chalk.bold.green('✔ Report Generated Successfully'));
-            console.log(`  Path: ${chalk.underline(outputPath)}`);
-            console.log('\n' + chalk.dim('Open this file to view your detailed compliance score and remediation steps.'));
+            console.log('\n' + chalk.bold.green('✔ Report(s) Generated Successfully'));
+
+            if (wantsMd) {
+                console.log(`  Markdown: ${chalk.underline(outputPath)}`);
+            }
+            if (wantsSarif) {
+                const sarifPath = outputPath.replace(/\.md$/, '.sarif');
+                console.log(`  SARIF:    ${chalk.underline(sarifPath)}`);
+            }
+
+            console.log('\n' + chalk.dim('Open the report to view your detailed compliance score and remediation steps.'));
         } else {
             spinner.fail(chalk.red('Audit Failed'));
             console.error(chalk.red(`Process exited with code ${code}`));

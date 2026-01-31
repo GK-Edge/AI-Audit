@@ -25,7 +25,7 @@ program
     .action(async (targetPath, options) => {
         console.log(`Starting audit for ${targetPath} with standard ${options.standard}`);
         try {
-            const allowedFormats = ["markdown", "sarif"] as const;
+            const allowedFormats = ["markdown", "sarif", "both"] as const;
             const allowedFailOn = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"] as const;
 
             const reportFormat = options.format ? (String(options.format).toLowerCase() as typeof allowedFormats[number]) : undefined;

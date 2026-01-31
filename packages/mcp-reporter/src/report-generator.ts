@@ -212,7 +212,13 @@ async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputP
             return false;
         });
 
-        const isPass = violations.length === 0;
+        // Filter out INFO findings - they should be warnings, not failures
+        const blockingViolations = violations.filter(item => {
+            const f = isGroup(item) ? item.findings[0] : item;
+            return f.severity !== "INFO";
+        });
+
+        const isPass = blockingViolations.length === 0;
         if (isPass) passedControls++;
 
         lines.push(`\n### ${isPass ? "✅" : "❌"} [${control.id}] ${control.name}`);
