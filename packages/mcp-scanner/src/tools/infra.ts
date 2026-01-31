@@ -24,12 +24,38 @@ export async function runInfraScan(targetPath: string): Promise<ScanResult> {
                 const relPath = path.relative(targetPath, dfPath);
 
                 // Check 1: Running as Root (Missing USER)
-                if (!content.includes('USER ') || content.includes('USER root')) {
+                // Intelligent parsing to handle multi-stage builds and temporary root switching
+                let lastUser = "root"; // Default assumption
+                const lines = content.split('\n');
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith('#')) continue;
+
+                    // Reset on new stage (FROM), as it resets to base image user (usually root)
+                    // We match "FROM " case-insensitive
+                    if (/^FROM\s/i.test(trimmed)) {
+                        lastUser = "root";
+                    }
+
+                    // Track user switches
+                    if (/^USER\s/i.test(trimmed)) {
+                        const parts = trimmed.split(/\s+/);
+                        if (parts.length >= 2) {
+                            lastUser = parts[1];
+                        }
+                    }
+                }
+
+                // Check if final user is root (or 0)
+                const isRoot = lastUser.toLowerCase() === 'root' || lastUser === '0' || lastUser.startsWith('root:') || lastUser.startsWith('0:');
+
+                if (isRoot) {
                     findings.push({
                         id: "DOCKER-RUNNING-AS-ROOT",
                         tool: "infra-scanner",
                         title: "Container Running as Root",
-                        description: `Dockerfile at ${relPath} does not specify a non-root USER or explicitly switches to root. This violates least privilege.`,
+                        description: `Dockerfile at ${relPath} ends with user '${lastUser}' (or defaults to root). Ensure a non-root USER is defined in the final stage.`,
                         severity: "HIGH",
                         category: "INFRASTRUCTURE",
                         location: { path: dfPath },
