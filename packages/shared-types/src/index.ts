@@ -33,6 +33,8 @@ export interface Finding {
     remediation?: Remediation;
     mappings?: RegulationMapping[];
     metadata?: Record<string, any>; // Raw tool output or extra context
+    suppressed?: boolean;
+    mitigationReason?: string;
 }
 
 export interface ScanResult {

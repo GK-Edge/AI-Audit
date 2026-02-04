@@ -1,0 +1,101 @@
+rules:
+  # =================================================================
+  # FALSE POSITIVE SUPPRESSION RULES
+  # These rules identify known-safe patterns that should NOT be flagged
+  # =================================================================
+
+  # -----------------------------------------------------------------
+  # PATH TRAVERSAL: Safe when using startsWith() validation
+  # -----------------------------------------------------------------
+  - id: safe-path-traversal-startswith
+    message: >-
+      INFO: This path.join/resolve usage is SAFE because it validates
+      against the base directory using startsWith() check.
+    languages: [javascript, typescript]
+    severity: INFO
+    mode: taint
+    options:
+      symbolic_propagation: true
+    pattern-sources:
+      - pattern: path.join(...)
+      - pattern: path.resolve(...)
+      - pattern: path.normalize(...)
+    pattern-sinks:
+      - pattern: $X.startsWith($BASE)
+    metadata:
+      category: safe-pattern
+      confidence: HIGH
+
+  # -----------------------------------------------------------------
+  # XSS: Safe when using DOMPurify.sanitize()
+  # -----------------------------------------------------------------
+  - id: safe-xss-dompurify
+    message: >-
+      This innerHTML usage is SAFE because DOMPurify.sanitize()
+      wraps the content before insertion.
+    languages: [javascript, typescript]
+    severity: INFO
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = DOMPurify.sanitize($X)
+          - pattern: $EL.innerHTML = DOMPurify.sanitize($X, $OPTS)
+    metadata:
+      category: safe-pattern
+      confidence: HIGH
+
+  # -----------------------------------------------------------------
+  # XSS: Safe when using escapeHtml() or similar escape functions
+  # -----------------------------------------------------------------
+  - id: safe-xss-escapehtml
+    message: >-
+      This innerHTML usage appears SAFE because content is passed through
+      an escape function (escapeHtml, htmlEscape, etc.) before insertion.
+    languages: [javascript, typescript]
+    severity: INFO
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = escapeHtml($X)
+          - pattern: $EL.innerHTML = htmlEscape($X)
+          - pattern: $EL.innerHTML = sanitize($X)
+          - pattern: $EL.innerHTML = sanitizeHtml($X)
+    metadata:
+      category: safe-pattern
+      confidence: MEDIUM
+
+  # -----------------------------------------------------------------
+  # COMMAND INJECTION: Safe when shell: false is explicitly set
+  # -----------------------------------------------------------------
+  - id: safe-spawn-shell-false
+    message: >-
+      This spawn usage is SAFE because shell: false is explicitly set,
+      preventing shell injection attacks.
+    languages: [javascript, typescript]
+    severity: INFO
+    pattern-either:
+      - pattern: "spawn($CMD, $ARGS, {shell: false})"
+      - pattern: "spawn($CMD, $ARGS, {shell: false, cwd: $CWD})"
+      - pattern: "spawn($CMD, $ARGS, {cwd: $CWD, shell: false})"
+      - pattern: "spawn($CMD, $ARGS, {shell: false, env: $ENV})"
+      - pattern: "spawn($CMD, $ARGS, {shell: false, stdio: $STDIO})"
+      - pattern: "spawn($CMD, $ARGS, {shell: false, cwd: $CWD, env: $ENV})"
+    metadata:
+      category: safe-pattern
+      confidence: HIGH
+
+  # -----------------------------------------------------------------
+  # COMMAND INJECTION: Dangerous - shell: true flagged
+  # -----------------------------------------------------------------
+  - id: dangerous-spawn-shell-true
+    message: >-
+      DANGER: spawn with shell: true allows shell metacharacter injection.
+      Use shell: false and pass arguments as an array instead.
+    languages: [javascript, typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: "spawn($CMD, $ARGS, {shell: true})"
+      - pattern: "spawn($CMD, $ARGS, {shell: true, cwd: $CWD})"
+      - pattern: "spawn($CMD, $ARGS, {cwd: $CWD, shell: true})"
+    metadata:
+      category: command-injection
+      cwe: CWE-78
+      confidence: HIGH

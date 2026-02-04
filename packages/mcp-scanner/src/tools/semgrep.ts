@@ -4,6 +4,7 @@ import * as path from "path";
 import { ScanResult, Finding } from "@ai-auditor/shared-types";
 
 import { fileURLToPath } from 'url';
+import { MitigationDetector } from "../utils/mitigation-detector.js";
 
 const execAsync = util.promisify(exec);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,14 +23,15 @@ export async function runSemgrepScan(targetPath: string): Promise<ScanResult> {
         // Using auto configuration for broadest coverage without login requirement
         // Resolve absolute path to local rules
         const rulePath = path.resolve(__dirname, "../../src/rules/casa-token-security.yaml");
-        const command = `semgrep scan --config=auto --config="${rulePath}" --json "${targetPath}"`;
+        const suppressionRulePath = path.resolve(__dirname, "../../src/rules/casa-fp-suppressions.yaml");
+        const command = `semgrep scan --config=auto --config="${rulePath}" --config="${suppressionRulePath}" --json "${targetPath}"`;
         const { stdout } = await execAsync(command, { maxBuffer: 10 * 1024 * 1024 });
 
         const semgrepOutput = JSON.parse(stdout);
 
         // Map semgrep results to our unified Finding format
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const findings: Finding[] = semgrepOutput.results.map((r: any) => ({
+        let findings: Finding[] = semgrepOutput.results.map((r: any) => ({
             id: r.check_id + "-" + r.start.line,
             tool: "semgrep",
             title: r.check_id,
@@ -46,6 +48,10 @@ export async function runSemgrepScan(targetPath: string): Promise<ScanResult> {
             cweId: r.extra.metadata?.cwe ? (Array.isArray(r.extra.metadata.cwe) ? r.extra.metadata.cwe.map((c: string) => c.split(':')[0]) : [r.extra.metadata.cwe.split(':')[0]]) : [],
             metadata: r
         }));
+
+        // Apply Mitigation Detection
+        const mitigationDetector = new MitigationDetector();
+        findings = await mitigationDetector.processFindings(findings, targetPath);
 
         return {
             tool: "semgrep",

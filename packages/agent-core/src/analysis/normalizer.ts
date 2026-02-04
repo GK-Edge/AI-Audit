@@ -27,7 +27,9 @@ export class Normalizer {
      * Main entry point to normalize a list of raw findings.
      */
     public normalize(findings: Finding[]): Finding[] {
-        return findings.map(f => this.normalizeSingle(f));
+        return findings
+            .filter(f => !f.suppressed)
+            .map(f => this.normalizeSingle(f));
     }
 
     private normalizeSingle(finding: Finding): Finding {
