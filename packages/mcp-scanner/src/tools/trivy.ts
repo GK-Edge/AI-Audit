@@ -1,6 +1,7 @@
 import { exec } from "child_process";
 import * as util from "util";
 import { ScanResult, Finding } from "@ai-auditor/shared-types";
+import * as path from "path";
 
 const execAsync = util.promisify(exec);
 
@@ -13,8 +14,29 @@ export async function runTrivyScan(targetPath: string): Promise<ScanResult> {
             throw new Error("Trivy is not installed or not in PATH.");
         }
 
+        // Parse .auditignore if it exists
+        let skipFlags = "";
+        try {
+            const ignorePath = path.join(targetPath, ".auditignore");
+            const fs = await import("fs/promises");
+            const ignoreContent = await fs.readFile(ignorePath, "utf-8");
+            const ignores = ignoreContent.split("\n").filter(line => line.trim() && !line.startsWith("#"));
+
+            ignores.forEach(pattern => {
+                const clean = pattern.trim();
+                // Heuristic: if ends with / or has no extension, assume dir. Otherwise file.
+                if (clean.endsWith("/") || !path.extname(clean)) {
+                    skipFlags += ` --skip-dirs "${clean.replace(/\/$/, '')}"`;
+                } else {
+                    skipFlags += ` --skip-files "${clean}"`;
+                }
+            });
+        } catch (e) {
+            // No .auditignore found
+        }
+
         // Run trivy fs scan with json output
-        const command = `trivy fs --format json "${targetPath}"`;
+        const command = `trivy fs --format json ${skipFlags} "${targetPath}"`;
         const { stdout } = await execAsync(command, { maxBuffer: 10 * 1024 * 1024 });
 
         const trivyOutput = JSON.parse(stdout);

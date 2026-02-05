@@ -22,9 +22,24 @@ export async function runSemgrepScan(targetPath: string): Promise<ScanResult> {
         // Run semgrep with json output
         // Using auto configuration for broadest coverage without login requirement
         // Resolve absolute path to local rules
+        // Resolve absolute path to local rules
         const rulePath = path.resolve(__dirname, "../../src/rules/casa-token-security.yaml");
         const suppressionRulePath = path.resolve(__dirname, "../../src/rules/casa-fp-suppressions.yaml");
-        const command = `semgrep scan --config=auto --config="${rulePath}" --config="${suppressionRulePath}" --json "${targetPath}"`;
+
+        // Parse .auditignore if it exists
+        let excludeFlags = "";
+        try {
+            const ignorePath = path.join(targetPath, ".auditignore");
+            const fs = await import("fs/promises");
+            const ignoreContent = await fs.readFile(ignorePath, "utf-8");
+            const ignores = ignoreContent.split("\n").filter(line => line.trim() && !line.startsWith("#"));
+            excludeFlags = ignores.map(pattern => `--exclude="${pattern.trim()}"`).join(" ");
+            // console.log(`[Semgrep] Applied .auditignore: ${excludeFlags}`);
+        } catch (e) {
+            // No .auditignore found, proceeding with defaults
+        }
+
+        const command = `semgrep scan --config=auto --config="${rulePath}" --config="${suppressionRulePath}" ${excludeFlags} --json "${targetPath}"`;
         const { stdout } = await execAsync(command, { maxBuffer: 10 * 1024 * 1024 });
 
         const semgrepOutput = JSON.parse(stdout);

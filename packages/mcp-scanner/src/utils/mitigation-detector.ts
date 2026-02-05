@@ -85,14 +85,10 @@ export class MitigationDetector {
 
         // 3. Check for Command Injection Mitigations
         if (title.includes('command injection') || description.includes('spawn') || description.includes('exec')) {
-            // Special case: If description explicitly warns about shell: true, DON'T suppress
-            if (result.description.includes('DANGER: spawn with shell: true')) {
-                return result;
-            }
-
-            if (this.isCommandInjectionMitigated(contextLines)) {
+            const mitigationReason = this.getCommandInjectionMitigation(contextLines);
+            if (mitigationReason) {
                 result.suppressed = true;
-                result.mitigationReason = 'Command execution configured with shell: false';
+                result.mitigationReason = mitigationReason;
             }
         }
 
@@ -123,10 +119,23 @@ export class MitigationDetector {
     }
 
     /**
-     * Detects shell: false configuration
+     * Detects safe command execution patterns:
+     * 1. shell: false matching
+     * 2. Hardcoded command literals (safe even with shell: true)
      */
-    private isCommandInjectionMitigated(context: string): boolean {
-        // Look for shell: false in the options object passed to spawn/exec
-        return /shell\s*:\s*false/.test(context);
+    private getCommandInjectionMitigation(context: string): string | null {
+        // 1. Explicit shell: false
+        if (/shell\s*:\s*false/.test(context)) {
+            return 'Command execution configured with shell: false';
+        }
+
+        // 2. Hardcoded command literal (e.g. spawn('npm', ...) or exec('git status'))
+        // Regex looks for spawn/exec followed by a quote, indicating a string literal argument
+        // Matches: spawn('  spawn("  exec('  exec("
+        if (/(?:spawn|exec)\s*\(\s*['"][\w-]+['"]/.test(context)) {
+            return 'Command is a hardcoded string literal operation (safe from injection)';
+        }
+
+        return null;
     }
 }
