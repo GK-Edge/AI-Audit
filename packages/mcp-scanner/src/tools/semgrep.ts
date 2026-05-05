@@ -1,4 +1,4 @@
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import * as util from "util";
 import * as path from "path";
 import { ScanResult, Finding } from "@ai-auditor/shared-types";
@@ -6,7 +6,7 @@ import { ScanResult, Finding } from "@ai-auditor/shared-types";
 import { fileURLToPath } from 'url';
 import { MitigationDetector } from "../utils/mitigation-detector.js";
 
-const execAsync = util.promisify(exec);
+const execFileAsync = util.promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export async function runSemgrepScan(targetPath: string): Promise<ScanResult> {
@@ -14,7 +14,7 @@ export async function runSemgrepScan(targetPath: string): Promise<ScanResult> {
     try {
         // Check if semgrep is available
         try {
-            await execAsync("semgrep --version");
+            await execFileAsync("semgrep", ["--version"]);
         } catch (e) {
             throw new Error("Semgrep is not installed or not in PATH.");
         }
@@ -27,20 +27,27 @@ export async function runSemgrepScan(targetPath: string): Promise<ScanResult> {
         const suppressionRulePath = path.resolve(__dirname, "../../src/rules/casa-fp-suppressions.yaml");
 
         // Parse .auditignore if it exists
-        let excludeFlags = "";
+        let excludeArgs: string[] = [];
         try {
             const ignorePath = path.join(targetPath, ".auditignore");
             const fs = await import("fs/promises");
             const ignoreContent = await fs.readFile(ignorePath, "utf-8");
             const ignores = ignoreContent.split("\n").filter(line => line.trim() && !line.startsWith("#"));
-            excludeFlags = ignores.map(pattern => `--exclude="${pattern.trim()}"`).join(" ");
-            // console.log(`[Semgrep] Applied .auditignore: ${excludeFlags}`);
+            excludeArgs = ignores.flatMap(pattern => ["--exclude", pattern.trim()]);
         } catch (e) {
             // No .auditignore found, proceeding with defaults
         }
 
-        const command = `semgrep scan --config=auto --config="${rulePath}" --config="${suppressionRulePath}" ${excludeFlags} --json "${targetPath}"`;
-        const { stdout } = await execAsync(command, { maxBuffer: 10 * 1024 * 1024 });
+        const args = [
+            "scan",
+            "--config=auto",
+            `--config=${rulePath}`,
+            `--config=${suppressionRulePath}`,
+            ...excludeArgs,
+            "--json",
+            targetPath
+        ];
+        const { stdout } = await execFileAsync("semgrep", args, { maxBuffer: 10 * 1024 * 1024 });
 
         const semgrepOutput = JSON.parse(stdout);
 

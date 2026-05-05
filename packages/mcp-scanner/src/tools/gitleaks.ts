@@ -1,11 +1,11 @@
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import * as util from "util";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { ScanResult, Finding } from "@ai-auditor/shared-types";
 
-const execAsync = util.promisify(exec);
+const execFileAsync = util.promisify(execFile);
 const readFileAsync = util.promisify(fs.readFile);
 const unlinkAsync = util.promisify(fs.unlink);
 
@@ -16,7 +16,7 @@ export async function runGitleaksScan(targetPath: string): Promise<ScanResult> {
     try {
         // Check if gitleaks is available
         try {
-            await execAsync("gitleaks version");
+            await execFileAsync("gitleaks", ["version"]);
         } catch (e) {
             console.warn("Gitleaks not found. Skipping secret scan.");
             return {
@@ -34,24 +34,30 @@ export async function runGitleaksScan(targetPath: string): Promise<ScanResult> {
         // We want history scan if possible, but fallback to no-git if not.
         let isGitRepo = false;
         try {
-            await execAsync("git rev-parse --is-inside-work-tree", { cwd: targetPath });
+            await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: targetPath });
             isGitRepo = true;
         } catch (e) {
             isGitRepo = false;
         }
 
-        let command = "";
+        const args = [
+            "detect",
+            "--source", targetPath,
+            "--report-path", tempReportPath,
+            "--report-format", "json",
+            "--verbose"
+        ];
+
         if (isGitRepo) {
-            // Scan history
-            command = `gitleaks detect --source="${targetPath}" --report-path="${tempReportPath}" --report-format=json --verbose`;
+            // Scan history.
         } else {
             // Scan current files only (no history)
-            command = `gitleaks detect --source="${targetPath}" --no-git --report-path="${tempReportPath}" --report-format=json --verbose`;
+            args.push("--no-git");
         }
 
         // Gitleaks returns exit code 1 if leaks are found, so we expect potential "failure" in execution
         try {
-            await execAsync(command, { maxBuffer: 10 * 1024 * 1024 });
+            await execFileAsync("gitleaks", args, { maxBuffer: 10 * 1024 * 1024 });
         } catch (error: any) {
             // If exit code is 1, it might just mean findings were found.
             // If report file exists, it was successful finding leaks.
@@ -77,7 +83,7 @@ Commit: ${r.Commit}
 Author: ${r.Author}
 Date: ${r.Date}`,
                 severity: "CRITICAL", // Secrets are always critical
-                category: "Secrets",
+                category: "SECRET",
                 location: {
                     path: r.File,
                     startLine: r.StartLine,

@@ -1,5 +1,4 @@
-import { Finding, FindingGroup } from "@ai-auditor/shared-types";
-import crypto from "crypto";
+import { Finding, FindingGroup, RegulationMapping } from "@ai-auditor/shared-types";
 
 export class Deduplicator {
 
@@ -7,13 +6,6 @@ export class Deduplicator {
         const groups: Map<string, FindingGroup> = new Map();
 
         for (const finding of findings) {
-            // Generate a fingerprint hash
-            // Strategy: Group by "Rule ID" + "File Path" is too granular (doesn't solve '221 violations' across many files)
-            // Strategy: Group by "Rule ID" is too broad (merges distinct issues)
-            // Strategy for CASA: Group by "Rule ID". 
-            // The goal is to say "You have 221 Path Traversal Issues".
-            // So we group by Rule ID (Title).
-
             const fingerprint = this.generateFingerprint(finding);
 
             if (groups.has(fingerprint)) {
@@ -25,9 +17,11 @@ export class Deduplicator {
                     group.severity = finding.severity;
                 }
 
-                // Accumulate Risk Score (naive max for now, improved later by RiskEngine)
-                // We'll let RiskEngine run BEFORE dedupe, so findings have scores.
-                // Here we just take the max score of the group.
+                group.riskScore = Math.max(group.riskScore, this.getRiskScore(finding));
+                group.tools = this.unique([...(group.tools || []), finding.tool]);
+                group.categories = this.unique([...(group.categories || []), finding.category]);
+                group.cweId = this.unique([...(group.cweId || []), ...(finding.cweId || [])]);
+                group.mappings = this.uniqueMappings([...(group.mappings || []), ...(finding.mappings || [])]);
             } else {
                 groups.set(fingerprint, {
                     id: fingerprint,
@@ -35,19 +29,54 @@ export class Deduplicator {
                     description: finding.description,
                     severity: finding.severity,
                     findings: [finding],
-                    riskScore: 0, // Will be calculated/aggregated 
-                    remediation: finding.remediation?.description
+                    riskScore: this.getRiskScore(finding),
+                    remediation: finding.remediation?.description,
+                    tools: [finding.tool],
+                    categories: [finding.category],
+                    cweId: finding.cweId || [],
+                    mappings: finding.mappings || []
                 });
             }
         }
 
-        return Array.from(groups.values());
+        return Array.from(groups.values()).sort((a, b) => {
+            const riskDiff = b.riskScore - a.riskScore;
+            if (riskDiff !== 0) return riskDiff;
+            return this.severityWeight(b.severity) - this.severityWeight(a.severity);
+        });
     }
 
     private generateFingerprint(finding: Finding): string {
-        // We group strictly by ID (or mapped Title) to collapse the "221 violations" into 1 row
-        // If the ID is generic, we might want to include category.
-        return finding.title;
+        const ruleId = this.getStableRuleId(finding);
+        const packageKey = finding.category === "DEPENDENCY" ? `:${finding.metadata?.PkgName || finding.metadata?.pkgName || "unknown-package"}` : "";
+        return [finding.tool, finding.category, ruleId + packageKey].join(":");
+    }
+
+    private getStableRuleId(finding: Finding): string {
+        if (finding.metadata?.check_id) return String(finding.metadata.check_id);
+        if (finding.metadata?.VulnerabilityID) return String(finding.metadata.VulnerabilityID);
+        if (finding.metadata?.RuleID) return String(finding.metadata.RuleID);
+        if (/^.+-\d+$/.test(finding.id)) return finding.id.replace(/-\d+$/, "");
+        return finding.id || finding.title;
+    }
+
+    private getRiskScore(finding: Finding): number {
+        const riskScore = finding.metadata?.riskScore;
+        return typeof riskScore === "number" ? riskScore : this.severityWeight(finding.severity) * 20;
+    }
+
+    private unique<T extends string>(items: T[]): T[] {
+        return [...new Set(items)];
+    }
+
+    private uniqueMappings(mappings: RegulationMapping[]): RegulationMapping[] {
+        const seen = new Set<string>();
+        return mappings.filter(mapping => {
+            const key = `${mapping.standard}:${mapping.controlId}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
     }
 
     private severityWeight(severity: string): number {

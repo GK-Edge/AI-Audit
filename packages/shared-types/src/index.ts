@@ -47,6 +47,16 @@ export interface ScanResult {
     error?: string;
 }
 
+export interface ScanExecutionSummary {
+    tool: string;
+    success: boolean;
+    findingsCount: number;
+    durationMs: number;
+    error?: string;
+    skipped?: boolean;
+    warnings?: string[];
+}
+
 export interface FindingGroup {
     id: string;              // generic-id (e.g., "input-validation-error")
     title: string;           // "Input Validation Error"
@@ -55,6 +65,10 @@ export interface FindingGroup {
     findings: Finding[];     // The raw findings
     riskScore: number;       // 0-100 calculated score
     remediation?: string;    // AI-suggested fix
+    tools?: string[];
+    categories?: FindingCategory[];
+    cweId?: string[];
+    mappings?: RegulationMapping[];
 }
 
 export interface AuditPlan {

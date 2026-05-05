@@ -115,20 +115,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     required: ["targetPath"],
                 },
             },
-            {
-                name: "run_secret_scan",
-                description: "Run secret scanning using Gitleaks (scans git history).",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        targetPath: {
-                            type: "string",
-                            description: "Absolute path to the repository or directory to scan.",
-                        },
-                    },
-                    required: ["targetPath"],
-                },
-            },
         ],
     };
 });

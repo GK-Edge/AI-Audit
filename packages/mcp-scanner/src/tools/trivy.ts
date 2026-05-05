@@ -1,21 +1,21 @@
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import * as util from "util";
 import { ScanResult, Finding } from "@ai-auditor/shared-types";
 import * as path from "path";
 
-const execAsync = util.promisify(exec);
+const execFileAsync = util.promisify(execFile);
 
 export async function runTrivyScan(targetPath: string): Promise<ScanResult> {
     const startTime = Date.now();
     try {
         try {
-            await execAsync("trivy --version");
+            await execFileAsync("trivy", ["--version"]);
         } catch (e) {
             throw new Error("Trivy is not installed or not in PATH.");
         }
 
         // Parse .auditignore if it exists
-        let skipFlags = "";
+        const skipArgs: string[] = [];
         try {
             const ignorePath = path.join(targetPath, ".auditignore");
             const fs = await import("fs/promises");
@@ -26,9 +26,9 @@ export async function runTrivyScan(targetPath: string): Promise<ScanResult> {
                 const clean = pattern.trim();
                 // Heuristic: if ends with / or has no extension, assume dir. Otherwise file.
                 if (clean.endsWith("/") || !path.extname(clean)) {
-                    skipFlags += ` --skip-dirs "${clean.replace(/\/$/, '')}"`;
+                    skipArgs.push("--skip-dirs", clean.replace(/\/$/, ''));
                 } else {
-                    skipFlags += ` --skip-files "${clean}"`;
+                    skipArgs.push("--skip-files", clean);
                 }
             });
         } catch (e) {
@@ -36,8 +36,8 @@ export async function runTrivyScan(targetPath: string): Promise<ScanResult> {
         }
 
         // Run trivy fs scan with json output
-        const command = `trivy fs --format json ${skipFlags} "${targetPath}"`;
-        const { stdout } = await execAsync(command, { maxBuffer: 10 * 1024 * 1024 });
+        const args = ["fs", "--format", "json", ...skipArgs, targetPath];
+        const { stdout } = await execFileAsync("trivy", args, { maxBuffer: 10 * 1024 * 1024 });
 
         const trivyOutput = JSON.parse(stdout);
         const findings: Finding[] = [];

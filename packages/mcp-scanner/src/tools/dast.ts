@@ -1,5 +1,7 @@
 
 import axios from 'axios';
+import { lookup } from 'dns/promises';
+import net from 'net';
 import { Finding, ScanResult } from "@ai-auditor/shared-types";
 
 interface DastCheck {
@@ -12,15 +14,13 @@ export async function runDastScan(targetUrl: string, authToken?: string): Promis
     const startTime = Date.now();
     const findings: Finding[] = [];
 
-    // Normalize URL
-    if (!targetUrl.startsWith('http')) {
-        targetUrl = 'http://' + targetUrl; // Default to http for local dev
-    }
-
     try {
+        targetUrl = await normalizeAndValidateDastUrl(targetUrl);
+
         // Main Request
         const requestConfig: any = {
             validateStatus: () => true, // resolve promise for all status codes
+            maxRedirects: 0,
             timeout: 5000,
             headers: {}
         };
@@ -164,6 +164,7 @@ export async function runDastScan(targetUrl: string, authToken?: string): Promis
                 const fileUrl = targetUrl.replace(/\/$/, '') + file;
                 const fileRes = await axios.get(fileUrl, {
                     validateStatus: () => true,
+                    maxRedirects: 0,
                     timeout: 2000
                 });
 
@@ -218,4 +219,54 @@ export async function runDastScan(targetUrl: string, authToken?: string): Promis
             error: error.message
         };
     }
+}
+
+async function normalizeAndValidateDastUrl(input: string): Promise<string> {
+    const normalizedInput = input.startsWith('http') ? input : `http://${input}`;
+    let parsed: URL;
+
+    try {
+        parsed = new URL(normalizedInput);
+    } catch {
+        throw new Error(`Invalid DAST URL: ${input}`);
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error(`Unsupported DAST URL protocol: ${parsed.protocol}`);
+    }
+
+    const hostname = parsed.hostname;
+    if (isExplicitLocalhost(hostname)) {
+        return parsed.toString();
+    }
+
+    const resolved = await lookup(hostname, { all: true });
+    const blockedAddress = resolved.find(record => isBlockedDastAddress(record.address));
+    if (blockedAddress) {
+        throw new Error(`Blocked DAST target ${hostname}: resolved to private/internal address ${blockedAddress.address}. Use localhost for local scans.`);
+    }
+
+    return parsed.toString();
+}
+
+function isExplicitLocalhost(hostname: string): boolean {
+    const lower = hostname.toLowerCase();
+    return lower === 'localhost' || lower === '::1' || lower === '[::1]' || lower.startsWith('127.');
+}
+
+function isBlockedDastAddress(address: string): boolean {
+    if (address === '::1') return true;
+    if (address.startsWith('fe80:') || address.startsWith('fc') || address.startsWith('fd')) return true;
+
+    if (net.isIP(address) !== 4) return false;
+
+    const [a, b] = address.split('.').map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+
+    return false;
 }

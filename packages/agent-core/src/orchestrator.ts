@@ -3,7 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import path from "path";
 import { fileURLToPath } from "url";
-import { Finding, ScanResult, Severity, FindingGroup } from "@ai-auditor/shared-types";
+import { Finding, ScanExecutionSummary, ScanResult, Severity, FindingGroup } from "@ai-auditor/shared-types";
 import { Normalizer } from "./analysis/normalizer.js";
 import { RiskEngine } from "./analysis/risk-engine.js";
 import { Deduplicator } from "./analysis/deduplicator.js";
@@ -40,6 +40,26 @@ function getHighestSeverity(findings: Finding[]): Severity | null {
     }, null as Severity | null);
 }
 
+function summarizeScan(scanData: ScanResult): ScanExecutionSummary {
+    return {
+        tool: scanData.tool,
+        success: scanData.success,
+        findingsCount: scanData.findings.length,
+        durationMs: scanData.durationMs,
+        error: scanData.error
+    };
+}
+
+function summarizeScannerError(tool: string, error: unknown): ScanExecutionSummary {
+    return {
+        tool,
+        success: false,
+        findingsCount: 0,
+        durationMs: 0,
+        error: error instanceof Error ? error.message : String(error)
+    };
+}
+
 export async function runAudit(
     targetPath: string,
     outputPath: string,
@@ -68,6 +88,7 @@ export async function runAudit(
         const IGNORED_DIRS = ["test", "tests", "spec", "mock", "node_modules", "dist"];
 
         const allFindings: Finding[] = [];
+        const scanSummary: ScanExecutionSummary[] = [];
 
         // 1. Run SAST Scan (Semgrep)
         console.log("Running SAST Scan (Semgrep)...");
@@ -86,6 +107,7 @@ export async function runAudit(
 
             if (sastResult.content[0].type === "text") {
                 const scanData = JSON.parse(sastResult.content[0].text) as ScanResult;
+                scanSummary.push(summarizeScan(scanData));
                 if (scanData.success) {
                     // Deep Audit Step: Validate Findings Context
                     const relevantFindings = scanData.findings.filter(f => {
@@ -104,6 +126,7 @@ export async function runAudit(
                 }
             }
         } catch (err) {
+            scanSummary.push(summarizeScannerError("semgrep", err));
             console.error("Failed to run SAST scan:", err);
             throw err; // Re-throw to fail the process
         }
@@ -125,6 +148,7 @@ export async function runAudit(
 
             if (depResult.content[0].type === "text") {
                 const scanData = JSON.parse(depResult.content[0].text) as ScanResult;
+                scanSummary.push(summarizeScan(scanData));
                 if (scanData.success) {
                     allFindings.push(...scanData.findings);
                     console.log(`Dependency Scan complete. Found ${scanData.findings.length} issues.`);
@@ -136,6 +160,7 @@ export async function runAudit(
                 }
             }
         } catch (err) {
+            scanSummary.push(summarizeScannerError("trivy", err));
             console.error("Failed to run Dependency scan:", err);
             throw err; // Re-throw to fail the process
         }
@@ -156,6 +181,7 @@ export async function runAudit(
 
             if (evidenceResult.content[0].type === "text") {
                 const scanData = JSON.parse(evidenceResult.content[0].text) as ScanResult;
+                scanSummary.push(summarizeScan(scanData));
                 if (scanData.success) {
                     allFindings.push(...scanData.findings);
                     console.log(`Evidence Scan complete. Found ${scanData.findings.length} issues/items.`);
@@ -164,6 +190,7 @@ export async function runAudit(
                 }
             }
         } catch (err) {
+            scanSummary.push(summarizeScannerError("evidence-scanner", err));
             console.error("Failed to run Evidence scan:", err);
         }
 
@@ -183,6 +210,7 @@ export async function runAudit(
 
             if (secretResult.content[0].type === "text") {
                 const scanData = JSON.parse(secretResult.content[0].text) as ScanResult;
+                scanSummary.push(summarizeScan(scanData));
                 if (scanData.success) {
                     allFindings.push(...scanData.findings);
                     console.log(`Secret Scan complete. Found ${scanData.findings.length} issues.`);
@@ -191,6 +219,7 @@ export async function runAudit(
                 }
             }
         } catch (err) {
+            scanSummary.push(summarizeScannerError("gitleaks", err));
             console.error("Failed to run Secret scan:", err);
         }
 
@@ -211,6 +240,7 @@ export async function runAudit(
 
             if (infraResult.content[0].type === "text") {
                 const scanData = JSON.parse(infraResult.content[0].text) as ScanResult;
+                scanSummary.push(summarizeScan(scanData));
                 if (scanData.success) {
                     allFindings.push(...scanData.findings);
                     console.log(`Infra Scan complete. Found ${scanData.findings.length} issues.`);
@@ -219,6 +249,7 @@ export async function runAudit(
                 }
             }
         } catch (err) {
+            scanSummary.push(summarizeScannerError("infra-scanner", err));
             console.error("Failed to run Infra scan:", err);
         }
 
@@ -239,6 +270,7 @@ export async function runAudit(
 
                 if (dastResult.content[0].type === "text") {
                     const scanData = JSON.parse(dastResult.content[0].text) as ScanResult;
+                    scanSummary.push(summarizeScan(scanData));
                     if (scanData.success) {
                         allFindings.push(...scanData.findings);
                         console.log(`DAST Scan complete. Found ${scanData.findings.length} issues.`);
@@ -247,8 +279,18 @@ export async function runAudit(
                     }
                 }
             } catch (err) {
+                scanSummary.push(summarizeScannerError("dast-scanner", err));
                 console.error("Failed to run DAST scan:", err);
             }
+        } else {
+            scanSummary.push({
+                tool: "dast-scanner",
+                success: true,
+                findingsCount: 0,
+                durationMs: 0,
+                skipped: true,
+                warnings: ["DAST skipped because no target URL was provided."]
+            });
         }
 
         // --- PHASE 5: INTELLIGENCE ENGINE ---
@@ -304,7 +346,8 @@ export async function runAudit(
                                 findings: finalGroups,
                                 outputPath: currentOutputPath,
                                 profileId,
-                                format: fmt
+                                format: fmt,
+                                scanSummary
                             }
                         }
                     },
@@ -319,10 +362,11 @@ export async function runAudit(
 
         if (failOn) {
             const threshold = severityOrder[failOn];
-            const blockingFindings = allFindings.filter((finding) => severityOrder[finding.severity] >= threshold);
-            if (blockingFindings.length > 0) {
+            const blockingGroups = finalGroups.filter((group) => severityOrder[group.severity] >= threshold);
+            if (blockingGroups.length > 0) {
+                const blockingFindings = blockingGroups.flatMap(group => group.findings);
                 const highestSeverity = getHighestSeverity(blockingFindings);
-                throw new Error(`Fail-on threshold met (${failOn}). ${blockingFindings.length} finding(s) at or above ${failOn}. Highest severity: ${highestSeverity}.`);
+                throw new Error(`Fail-on threshold met (${failOn}). ${blockingGroups.length} unique issue(s) affecting ${blockingFindings.length} finding instance(s) at or above ${failOn}. Highest severity: ${highestSeverity}.`);
             }
         }
     } finally {

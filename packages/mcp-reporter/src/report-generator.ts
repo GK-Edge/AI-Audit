@@ -1,4 +1,4 @@
-import { Finding, FindingGroup, CASA_PROFILE, CISSP_PROFILE, SOC2_PROFILE, AuditProfile, Severity } from "@ai-auditor/shared-types";
+import { Finding, FindingGroup, CASA_PROFILE, CISSP_PROFILE, SOC2_PROFILE, AuditProfile, Severity, AuditControl, ScanExecutionSummary } from "@ai-auditor/shared-types";
 import * as fs from "fs/promises";
 import * as path from "path";
 
@@ -7,6 +7,11 @@ function isGroup(item: Finding | FindingGroup): item is FindingGroup {
 }
 
 type ReportFormat = "markdown" | "sarif";
+type ControlStatus = "PASS" | "FAIL" | "MANUAL_REVIEW";
+
+function getFindings(item: Finding | FindingGroup): Finding[] {
+    return isGroup(item) ? item.findings : [item];
+}
 
 function resolveProfile(profileId: string): AuditProfile {
     switch (profileId) {
@@ -40,16 +45,17 @@ function mapSeverityToSarifLevel(severity: Severity): "error" | "warning" | "not
     }
 }
 
-async function generateSarifReport(items: (Finding | FindingGroup)[], outputPath: string): Promise<{ path: string }> {
+async function generateSarifReport(items: (Finding | FindingGroup)[], outputPath: string, scanSummary: ScanExecutionSummary[] = []): Promise<{ path: string }> {
     const rulesMap = new Map<string, { id: string; title: string; description: string; severity: Severity; tool: string; cweId?: string[] }>();
 
     items.forEach((item) => {
         // Use representative finding for rule metadata
-        const f = isGroup(item) ? item.findings[0] : item;
+        const f = getFindings(item)[0];
+        const ruleId = isGroup(item) ? item.id : f.id;
 
-        if (!rulesMap.has(f.id)) {
-            rulesMap.set(f.id, {
-                id: f.id,
+        if (!rulesMap.has(ruleId)) {
+            rulesMap.set(ruleId, {
+                id: ruleId,
                 title: isGroup(item) ? item.title : f.title, // Use grouped title if available
                 description: isGroup(item) ? item.description : f.description,
                 severity: isGroup(item) ? item.severity : f.severity,
@@ -72,9 +78,10 @@ async function generateSarifReport(items: (Finding | FindingGroup)[], outputPath
     }));
 
     const results = items.map((item) => {
-        const findings = isGroup(item) ? item.findings : [item as Finding];
+        const findings = getFindings(item);
         const representative = findings[0];
         const isGroupItem = isGroup(item);
+        const ruleId = isGroupItem ? item.id : representative.id;
 
         const locations = findings.map(f => {
             const region: Record<string, number> = {};
@@ -96,7 +103,7 @@ async function generateSarifReport(items: (Finding | FindingGroup)[], outputPath
         });
 
         return {
-            ruleId: representative.id,
+            ruleId,
             level: mapSeverityToSarifLevel(isGroupItem ? item.severity : representative.severity),
             message: {
                 text: `${isGroupItem ? item.title : representative.title}: ${isGroupItem ? item.description : representative.description}`
@@ -107,7 +114,9 @@ async function generateSarifReport(items: (Finding | FindingGroup)[], outputPath
                 category: representative.category,
                 tool: representative.tool,
                 cweId: representative.cweId,
-                remediation: isGroupItem ? item.remediation : representative.remediation?.description
+                remediation: isGroupItem ? item.remediation : representative.remediation?.description,
+                riskScore: isGroupItem ? item.riskScore : representative.metadata?.riskScore,
+                scanSummary
             }
         };
     });
@@ -124,7 +133,13 @@ async function generateSarifReport(items: (Finding | FindingGroup)[], outputPath
                         rules
                     }
                 },
-                results
+                results,
+                invocations: [
+                    {
+                        executionSuccessful: scanSummary.every(scan => scan.success || scan.skipped),
+                        properties: { scanSummary }
+                    }
+                ]
             }
         ]
     };
@@ -136,7 +151,80 @@ async function generateSarifReport(items: (Finding | FindingGroup)[], outputPath
     return { path: outputPath };
 }
 
-async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputPath: string, profile: AuditProfile): Promise<{ path: string }> {
+function appendScanSummary(lines: string[], scanSummary: ScanExecutionSummary[]): void {
+    if (scanSummary.length === 0) return;
+
+    lines.push(`\n## Scan Coverage & Limitations`);
+    lines.push(`\n| Tool | Status | Findings | Duration | Notes |`);
+    lines.push(`| :--- | :--- | ---: | ---: | :--- |`);
+
+    scanSummary.forEach(scan => {
+        const status = scan.skipped ? "Skipped" : scan.success ? "Completed" : "Failed";
+        const notes = [...(scan.warnings || []), scan.error].filter(Boolean).join(" ") || "-";
+        lines.push(`| ${scan.tool} | ${status} | ${scan.findingsCount} | ${scan.durationMs}ms | ${notes} |`);
+    });
+}
+
+function findingMatchesControl(f: Finding, control: AuditControl): boolean {
+    if (f.mappings?.some(mapping => mapping.controlId === control.id)) return true;
+
+    if (f.cweId && control.relatedCwes) {
+        if (f.cweId.some(c => control.relatedCwes!.includes(c))) return true;
+    }
+
+    if (control.id === "CASA.4.1" && f.category === "DEPENDENCY") return true;
+    if (control.id === "CASA.3.1") {
+        if (f.category === "SECRET") return true;
+        if (f.id === "DOCKER-SECRETS-IN-ENV") return true;
+        if (f.id === "DOT-ENV-FILE-DETECTED") return true;
+        if (f.tool === "gitleaks") return true;
+        if (f.id === "DAST-SENSITIVE-FILE") return true;
+    }
+
+    if (control.id === "CASA.1.1" && f.category === "SAST" && f.severity === "CRITICAL") return true;
+    if (control.id === "CASA.5.1" && (f.id === "RESTRICTED-SCOPE-WARNING" || f.id === "OAUTH-SCOPES-DETECTED")) return true;
+    if (control.id === "CASA.6.1" && f.id === "NO-RETENTION-LOGIC") return true;
+    if (control.id === "CASA.7.1" && (f.id.startsWith("MISSING-DOC-") || f.id === "MISSING-VDP-SECURITY-TXT")) return true;
+
+    if (control.id === "CASA.2.1") {
+        if (f.id === "SENSITIVE-LOG-DETECTED") return true;
+        if (f.id === "INSECURE-COOKIE-CONFIG") return true;
+        if (f.id === "DAST-MISSING-HSTS") return true;
+        if (f.id === "DAST-COOKIE-NO-SECURE") return true;
+    }
+
+    if (control.id === "CASA.1.1") {
+        if (f.id === "MISSING-SECURITY-HEADERS") return true;
+        if (f.id === "ADMIN-NO-MFA-DETECTED") return true;
+        if (f.id === "SESSION-NO-TIMEOUT") return true;
+        if (f.id === "DOCKER-RUNNING-AS-ROOT") return true;
+        if (f.id === "DOCKER-TAG-LATEST") return true;
+        if (f.id === "GHA-MISSING-PERMISSIONS") return true;
+        if (f.id === "DAST-MISSING-CSP") return true;
+        if (f.id === "DAST-MISSING-XFRAME") return true;
+        if (f.id === "DAST-MISSING-NOSNIFF") return true;
+        if (f.id === "DAST-COOKIE-NO-HTTPONLY") return true;
+        if (f.id === "DAST-COOKIE-NO-SAMESITE") return true;
+    }
+
+    return false;
+}
+
+function getControlStatus(hasBlockingViolations: boolean, hasManualCheck: boolean): ControlStatus {
+    if (hasBlockingViolations) return "FAIL";
+    if (hasManualCheck) return "MANUAL_REVIEW";
+    return "PASS";
+}
+
+function statusLabel(status: ControlStatus): string {
+    switch (status) {
+        case "PASS": return "✅ Pass";
+        case "FAIL": return "❌ Fail";
+        case "MANUAL_REVIEW": return "⚠️ Manual Review";
+    }
+}
+
+async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputPath: string, profile: AuditProfile, scanSummary: ScanExecutionSummary[] = []): Promise<{ path: string }> {
     const lines: string[] = [];
 
     // 1. Header
@@ -145,83 +233,32 @@ async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputP
     lines.push(`**Description**: ${profile.description}`);
     lines.push(`\n---`);
 
+    appendScanSummary(lines, scanSummary);
+
     // 2. Control Assessment Logic
     lines.push(`\n## Control Assessment`);
 
     let passedControls = 0;
-    let totalFindingsCount = 0;
+    let failedControls = 0;
+    let manualReviewControls = 0;
 
     for (const control of profile.controls) {
         // A. Automatic violations via CWE/Category
         const violations = items.filter(item => {
-            const f = isGroup(item) ? item.findings[0] : item; // Use representative finding
-
-            // 1. Check strict CWE match
-            if (f.cweId && control.relatedCwes) {
-                if (f.cweId.some(c => control.relatedCwes!.includes(c))) return true;
-            }
-
-            // 2. Fallback: Category-based mapping (Critical for generic findings)
-            // This ensures logic like "All Dependencies" maps to "Vulnerability Management" control
-            if (control.id === "CASA.4.1" && f.category === "DEPENDENCY") return true;
-            if (control.id === "CASA.3.1") { // Secrets
-                if (f.category === "SECRET") return true;
-                if (f.id === "DOCKER-SECRETS-IN-ENV") return true;
-                if (f.id === "DOT-ENV-FILE-DETECTED") return true;
-                // Gitleaks
-                if (f.tool === "gitleaks") return true;
-            }
-
-            // Map general SAST criticals to Input Validation or Data Protection as a catch-all if CWE is missing
-            if (control.id === "CASA.1.1" && f.category === "SAST" && f.severity === "CRITICAL") return true;
-
-            // 3. Evidence Mappings (CASA 5, 6, 7)
-            if (control.id === "CASA.5.1" && (f.id === "RESTRICTED-SCOPE-WARNING" || f.id === "OAUTH-SCOPES-DETECTED")) return true;
-            if (control.id === "CASA.6.1" && f.id === "NO-RETENTION-LOGIC") return true;
-            if (control.id === "CASA.7.1" && (f.id.startsWith("MISSING-DOC-") || f.id === "MISSING-VDP-SECURITY-TXT")) return true;
-
-            // 4. Advanced AppSec Mappings
-            if (control.id === "CASA.2.1") { // Data Protection
-                if (f.id === "SENSITIVE-LOG-DETECTED") return true;
-                if (f.id === "INSECURE-COOKIE-CONFIG") return true;
-            }
-            if (control.id === "CASA.1.1") { // Input/Config/Auth Validation
-                if (f.id === "MISSING-SECURITY-HEADERS") return true;
-                if (f.id === "ADMIN-NO-MFA-DETECTED") return true;
-                if (f.id === "SESSION-NO-TIMEOUT") return true;
-                if (f.id === "DOCKER-RUNNING-AS-ROOT") return true;
-                if (f.id === "DOCKER-TAG-LATEST") return true;
-                if (f.id === "GHA-MISSING-PERMISSIONS") return true;
-                if (f.id === "GHA-MISSING-PERMISSIONS") return true;
-                // DAST Mappings
-                if (f.id === "DAST-MISSING-CSP") return true;
-                if (f.id === "DAST-MISSING-XFRAME") return true;
-                if (f.id === "DAST-MISSING-NOSNIFF") return true;
-                if (f.id === "DAST-COOKIE-NO-HTTPONLY") return true;
-                if (f.id === "DAST-COOKIE-NO-SAMESITE") return true;
-            }
-            if (control.id === "CASA.2.1") { // Data Protection
-                // ... existing static mappings (id="SENSITIVE-LOG-DETECTED" etc handled by catch-all above if I merge logs, but here I append DAST)
-                if (f.id === "DAST-MISSING-HSTS") return true;
-                if (f.id === "DAST-COOKIE-NO-SECURE") return true;
-            }
-            if (control.id === "CASA.3.1") { // Secrets
-                if (f.id === "DAST-SENSITIVE-FILE") return true;
-            }
-
-            return false;
+            return getFindings(item).some(f => findingMatchesControl(f, control));
         });
 
         // Filter out INFO findings - they should be warnings, not failures
         const blockingViolations = violations.filter(item => {
-            const f = isGroup(item) ? item.findings[0] : item;
-            return f.severity !== "INFO";
+            return isGroup(item) ? item.severity !== "INFO" : item.severity !== "INFO";
         });
 
-        const isPass = blockingViolations.length === 0;
-        if (isPass) passedControls++;
+        const status = getControlStatus(blockingViolations.length > 0, Boolean(control.manualCheck));
+        if (status === "PASS") passedControls++;
+        if (status === "FAIL") failedControls++;
+        if (status === "MANUAL_REVIEW") manualReviewControls++;
 
-        lines.push(`\n### ${isPass ? "✅" : "❌"} [${control.id}] ${control.name}`);
+        lines.push(`\n### ${statusLabel(status)} [${control.id}] ${control.name}`);
         lines.push(`> ${control.description}`);
 
         // B. Manual Checks Hint
@@ -230,8 +267,10 @@ async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputP
         }
 
 
-        if (isPass) {
+        if (status === "PASS") {
             lines.push(`\n*Status: Compliant (No automated violations found)*`);
+        } else if (status === "MANUAL_REVIEW") {
+            lines.push(`\n*Status: Manual review required (No automated violations found)*`);
         } else {
             // Calculated total count for this control
             let controlViolationCount = 0;
@@ -246,7 +285,7 @@ async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputP
             // Iterate items directly (they are already grouped by Intelligence Engine if present, or raw if not)
             violations.forEach(item => {
                 const isGroupItem = isGroup(item);
-                const findings = isGroupItem ? item.findings : [item as Finding];
+                const findings = getFindings(item);
                 const representative = findings[0];
                 const title = isGroupItem ? item.title : representative.title;
                 const description = isGroupItem ? item.description : representative.description;
@@ -254,6 +293,9 @@ async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputP
                 const remediationText = isGroupItem ? item.remediation : representative.remediation?.description;
 
                 lines.push(`\n**${severity}**: ${title}`);
+                if (isGroupItem) {
+                    lines.push(`> **Risk Score**: ${item.riskScore}/100 across ${findings.length} instance(s)`);
+                }
                 lines.push(`> **Issue**: ${description}`);
 
                 // Add specific remediation advice based on the finding type
@@ -275,8 +317,7 @@ async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputP
                 lines.push(`| :--- | :--- |`);
                 // Limit to first 5 locations to avoid spamming the report
                 findings.slice(0, 5).forEach(f => {
-                    const relPath = f.location.path.split('/').pop() || f.location.path; // Show filename only for brevity
-                    lines.push(`| \`${relPath}\` | ${f.location.startLine || 0} |`);
+                    lines.push(`| \`${f.location.path}\` | ${f.location.startLine || 0} |`);
                 });
                 if (findings.length > 5) {
                     lines.push(`| *...and ${findings.length - 5} more instances* | |`);
@@ -286,10 +327,17 @@ async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputP
     }
 
     // 3. Scorecard
-    const score = Math.round((passedControls / profile.controls.length) * 100);
+    const automatedScore = Math.round(((profile.controls.length - failedControls) / profile.controls.length) * 100);
     lines.push(`\n---\n## Audit Scorecard`);
-    lines.push(`\n### Compliance Score: ${score}%`);
-    lines.push(score === 100 ? "🎉 **READY FOR CERTIFICATION**" : "⚠️ **REMEDIATION REQUIRED**");
+    lines.push(`\n### Automated Pass Score: ${automatedScore}%`);
+    lines.push(`Passed: ${passedControls} | Failed: ${failedControls} | Manual Review: ${manualReviewControls}`);
+    if (failedControls > 0) {
+        lines.push("⚠️ **REMEDIATION REQUIRED**");
+    } else if (manualReviewControls > 0) {
+        lines.push("⚠️ **AUTOMATED CHECKS PASSED, MANUAL EVIDENCE REQUIRED**");
+    } else {
+        lines.push("🎉 **AUTOMATED CONTROLS PASSED**");
+    }
 
     // 4. Detailed Appendix
     lines.push(`\n---\n## Appendix: Raw Findings`);
@@ -303,13 +351,13 @@ async function generateMarkdownReport(items: (Finding | FindingGroup)[], outputP
     return { path: outputPath };
 }
 
-export async function generateCasaReport(findings: (Finding | FindingGroup)[], outputPath: string, profileId: string = "CASA-Tier-2", format?: ReportFormat): Promise<{ path: string }> {
+export async function generateCasaReport(findings: (Finding | FindingGroup)[], outputPath: string, profileId: string = "CASA-Tier-2", format?: ReportFormat, scanSummary: ScanExecutionSummary[] = []): Promise<{ path: string }> {
     const profile = resolveProfile(profileId);
     const outputFormat = resolveReportFormat(outputPath, format);
 
     if (outputFormat === "sarif") {
-        return generateSarifReport(findings, outputPath);
+        return generateSarifReport(findings, outputPath, scanSummary);
     }
 
-    return generateMarkdownReport(findings, outputPath, profile);
+    return generateMarkdownReport(findings, outputPath, profile, scanSummary);
 }

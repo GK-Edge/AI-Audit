@@ -2,10 +2,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { Finding, ScanResult } from "@ai-auditor/shared-types";
-import { exec } from "child_process";
-import * as util from "util";
-
-const execAsync = util.promisify(exec);
 
 export async function runInfraScan(targetPath: string): Promise<ScanResult> {
     const startTime = Date.now();
@@ -14,10 +10,7 @@ export async function runInfraScan(targetPath: string): Promise<ScanResult> {
     try {
         // 1. Dockerfile Analysis (CIS Benchmarks subset)
         try {
-            // Find all Dockerfiles
-            const findDockerfiles = `find "${targetPath}" -name "*Dockerfile*" -not -path "*/node_modules/*" -not -path "*/.git/*"`;
-            const { stdout: dockerFilesOut } = await execAsync(findDockerfiles).catch(() => ({ stdout: "" }));
-            const dockerfiles = dockerFilesOut.split('\n').filter(Boolean);
+            const dockerfiles = await findDockerfiles(targetPath);
 
             for (const dfPath of dockerfiles) {
                 const content = await fs.readFile(dfPath, 'utf8');
@@ -172,4 +165,27 @@ export async function runInfraScan(targetPath: string): Promise<ScanResult> {
             error: error.message
         };
     }
+}
+
+async function findDockerfiles(rootPath: string): Promise<string[]> {
+    const dockerfiles: string[] = [];
+
+    async function walk(currentPath: string): Promise<void> {
+        const entries = await fs.readdir(currentPath, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+            const fullPath = path.join(currentPath, entry.name);
+            if (entry.isDirectory()) {
+                if (entry.name === "node_modules" || entry.name === ".git") continue;
+                await walk(fullPath);
+                continue;
+            }
+
+            if (entry.isFile() && entry.name.includes("Dockerfile")) {
+                dockerfiles.push(fullPath);
+            }
+        }
+    }
+
+    await walk(rootPath);
+    return dockerfiles;
 }

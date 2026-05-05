@@ -6,7 +6,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { generateCasaReport } from "./report-generator.js";
-import { Finding } from "@ai-auditor/shared-types";
+import { Finding, ScanExecutionSummary } from "@ai-auditor/shared-types";
 
 const server = new Server(
     {
@@ -47,6 +47,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             type: "string",
                             description: "The audit profile ID to use (e.g., 'CASA-Tier-2', 'CISSP-Domain-8', 'SOC2-CC'). Defaults to CASA.",
                             enum: ["CASA-Tier-2", "CISSP-Domain-8", "SOC2-CC"]
+                        },
+                        scanSummary: {
+                            type: "array",
+                            description: "Execution summary for scanners used in this audit.",
+                            items: { type: "object" }
                         }
                     },
                     required: ["findings", "outputPath"],
@@ -65,13 +70,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 findings: z.array(z.any()),
                 outputPath: z.string(),
                 profileId: z.string().optional(),
-                format: z.enum(["markdown", "sarif"]).optional()
+                format: z.enum(["markdown", "sarif"]).optional(),
+                scanSummary: z.array(z.any()).optional()
             }).parse(args);
 
             // Safe cast
             const findings = params.findings as Finding[];
+            const scanSummary = params.scanSummary as ScanExecutionSummary[] | undefined;
 
-            const result = await generateCasaReport(findings, params.outputPath, params.profileId || "CASA-Tier-2", params.format);
+            const result = await generateCasaReport(findings, params.outputPath, params.profileId || "CASA-Tier-2", params.format, scanSummary);
             return {
                 content: [
                     {
